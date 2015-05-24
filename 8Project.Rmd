@@ -1,0 +1,187 @@
+---
+title: 'Machine Learning: HAR Data analysis'
+author: "rachelxi"
+date: "24 May 2015"
+output: html_document
+---
+##Introduction
+This human activity recognition research has traditionally focused on discriminating between different activities, and the data set includes: six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Reference: Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+##Synopsis
+Hence this project tries to predict the classes through different models: classification tree with "rpart", random forest, random forest with principal component analysis. Overally speaking, the accuracy is highest for random forest with all predictors included, however, the model construction time is nearly twice longer than random forest with pca (accuracy 2% lower). Hence in practice, accuracy and computational efficiency should be both considered in deciding the best fitted model.
+
+Cross-validation is achieved by splitting the data randomly by classe, with 75% goes for training data and rest 25% for validation.
+
+##Data Preprocessing
+
+First to load all library required and the data with NA replacement inserted to the data:
+
+```{r,echo=TRUE}
+library(caret)
+library(rpart)
+library(rattle)
+library(randomForest)
+data <- read.csv("pml-training.csv",na.strings = c("NA", "","#DIV/0!"))
+dim(data)
+```
+
+As following table, the first seven rows of the data indicates row number, user names, time intervals and windows which are of no relation to prediction, so we can exclude them:
+
+```{r, echo=TRUE}
+head(data[,1:7],5)
+data <- data[,-(1:7)]
+```
+
+Then, we convert the classe variable to factor for prediction; and further explore the number of NAs included in each column.
+
+```{r, echo=TRUE}
+data$classe <- as.factor(data$classe)
+summary(colSums(is.na(data)))
+```
+
+Then we can filter the columns with major NAs included (<19000 out of 19622 rows).
+
+```{r, echo=TRUE}
+index <- colSums(is.na(data))<19000
+data <- data[index]
+dim(data)
+```
+
+Out of resulting data (size=19622*53), split the data randomly by classe with 75% for model training, 25% for validation to prepare for cross-validation:
+
+```{r, echo=TRUE}
+set.seed(2000)
+inTrain <- createDataPartition(y=data$classe,p=0.75,list=FALSE)
+training <- data[inTrain,]
+validation <- data[-inTrain,]
+```
+
+The predictors with near to zero variance should be removed, thus we explore the training data further. No predictor should be removed according to following commands:
+
+```{r, echo=TRUE}
+nsv <- nearZeroVar(training,saveMetrics=TRUE)
+sum(nsv$zeroVar=="TRUE")
+```
+
+The preprocessing part is finished.
+
+##Modelling
+
+1. Model 1, using classification tree with "rpart"
+
+Since the prediction is conducted with factor variable, classification tree is a good choice for identification. We can strat with "rpart" method, with method in trainControl() changed to "cv" for cross-validation. We can then plot the classification criteria:
+
+```{r, echo=TRUE}
+modelFit1 <- train(classe~.,method="rpart",data=training,trControl = trainControl(method = "cv"))
+fancyRpartPlot(modelFit1$finalModel)
+```
+
+Then to predict with the new built model 1 with both training and validation data:
+```{r, echo=TRUE}
+pred0 <- predict(modelFit1,newdata=training)
+pred1 <- predict(modelFit1,newdata=validation)
+confusionMatrix(pred0,training$classe)
+```
+
+```{r, echo=TRUE}
+confusionMatrix(pred1,validation$classe)
+```
+
+As we can see from confusion matrix, the accuracy for training data is 49.23% and 49.98% for testing data. The accuracy is too low to satisfy our requirements.
+
+2. Model 2, random forest with principal component analysis
+
+Then we can start model 2: random forest with pca. To begin with, data preprocessing is performed as below:
+
+```{r, echo=TRUE}
+proc <- preProcess(training[,-53],method="pca")
+length(proc)
+```
+
+And we can find 19 out of 52 predictors are selected for data compression with pca. Hence then we can used the built pca criteria to convert both training and validation data:
+
+```{r, echo=TRUE}
+trainPC <- predict(proc,newdata=training[,-53])
+validPC <-predict(proc,newdata=validation[,-53])
+```
+
+Then to train the model with transformed data: (the model training time is calculated as well for comparison)
+
+The elapsed time in building the model is 454.409 seconds (7.6 minutes). Prediction can also performed with model 2 and variable importance plot is demonstrated below for each pca variables:
+
+```{r, echo=TRUE}
+ptm <- proc.time()
+modelFit2 <- train(training$classe~.,method="rf",data=trainPC,ntree=200,trControl=trainControl(method="cv"))
+proc.time()-ptm
+pred2 <- predict(modelFit2,newdata=trainPC)
+pred3 <- predict(modelFit2,newdata=validPC)
+varImpPlot(modelFit2$finalModel)
+```
+
+Hence for the new model 2, the accuracy for training data is 100% and 97.96% for validation data. The accuracy rate is quite high.
+
+```{r, echo=TRUE}
+confusionMatrix(pred2,training$classe)
+```
+
+```{r, echo=TRUE}
+confusionMatrix(pred3,validation$classe)
+```
+
+3. Model 3, random forest with all variables included
+
+Without preprocessing using pca analysis, the model 3 directly introduces random forest to build the model and perform the predictions as following.
+
+The elapsed time in training the model then increases to 916.996 seconds (15.3 minutes) with all 52 predictors included. However, as shown in variable importance plot, some predictors actually have low importance.
+
+```{r, echo=TRUE}
+ptm <- proc.time()
+modelFit3 <- train(classe~.,method="rf",data=training,ntree=200,trControl=trainControl(method="cv"))
+proc.time()-ptm
+pred4 <- predict(modelFit3,newdata=training)
+pred5 <- predict(modelFit3,newdata=validation)
+varImpPlot(modelFit3$finalModel)
+```
+
+The accuracy of the new model 3 are 100% and 99.23% for training and validation data respectively: (2% higher than model 2 on validation data)
+
+```{r, echo=TRUE}
+confusionMatrix(pred4,training$classe)
+```
+
+```{r, echo=TRUE}
+confusionMatrix(pred5,validation$classe)
+```
+
+##Prediction with testing data
+
+Pre-processing:
+
+Then we can perform prediction to testing data with same pre-processing first:
+
+```{r, echo=TRUE}
+testing <- read.csv("pml-testing.csv",na.strings = c("NA", "","#DIV/0!"))
+testing <- testing[,-(1:7)]
+index <- colSums(is.na(testing))==0
+testing <- testing[index]
+```
+
+Prediction using Model 2: 
+
+```{r, echo=TRUE}
+testPC <- predict(proc,newdata=testing[,-53])
+prediction2 <- predict(modelFit2,newdata=testPC)
+```
+
+Prediction using Model 3: 
+
+```{r, echo=TRUE}
+prediction3 <- predict(modelFit3,newdata=testing[,-53])
+```
+
+Sum the difference:
+```{r,echo=TRUE}
+sum(prediction2!=prediction3)
+```
